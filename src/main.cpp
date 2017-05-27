@@ -2,13 +2,16 @@
 // Created by Jordi Brusa on 27.05.17.
 //
 
+#include "GOR_Platform.hpp"
 
 
-void setup() {
 
+
+void GOR_Setup() {
+    GOR_Config.begin();
 }
 
 
-void loop() {
+void GOR_Loop() {
 
 }
