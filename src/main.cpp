@@ -4,11 +4,18 @@
 
 #include "GOR_Platform.hpp"
 
+String GOR_HeartbeatPayload() {
+    return "{\"nodename\":\"" + gor.nodeName + "\"}";
+}
 
+
+void GOR_MessageReceived(String topic, String payload) {
+
+}
 
 
 void GOR_Setup() {
-    GOR_Config.begin();
+
 }
 
 

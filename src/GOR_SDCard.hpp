@@ -9,7 +9,7 @@
 #include <SD.h>
 
 #define CONFIG_FILE         "CONFIG.TXT"
-#define CONFIG_SD_CD_PIN    2
+#define LOG_FILE            "LOG.TXT"
 
 #define READ_NAME           1
 #define READ_VAL            2
@@ -32,7 +32,7 @@ public:
     GOR_Setting(String n, String v) : name(n), value(v) {};
 };
 
-class GOR_Config {
+class GOR_SDCard {
 private:
 
     vector<GOR_Setting> m_settings;
@@ -40,12 +40,12 @@ private:
 
 public:
 
-    GOR_Config() {
+    GOR_SDCard() {
     }
 
 
-    int begin() {
-        if(!SD.begin(CONFIG_SD_CD_PIN)) {
+    int begin(uint8_t pin) {
+        if(!SD.begin(pin)) {
             return GOR_Config_Errors::CARD_MOUNT_FAILED;
         };
 
@@ -105,9 +105,9 @@ public:
     }
 
 
-    String operator [](const String name) { return get(name); }
+    String operator [](const String name) { return getSetting(name); }
 
-    String get(const String name) {
+    String getSetting(const String name) {
         for(uint16_t i=0; i<m_settings.size(); i++) {
             if(m_settings[i].name == name) {
                 return m_settings[i].value;
@@ -117,7 +117,7 @@ public:
         return "";
     }
 
-    void set(const String name, const String value) {
+    void setSetting(const String name, const String value) {
         bool found = false;
 
         // Mise à jour du setting, s'il existe
@@ -145,6 +145,11 @@ public:
         file.close();
     }
 
+    void log(String s) {
+        File file = SD.open(LOG_FILE, FILE_APPEND);
+        file.println(s.c_str());
+        file.close();
+    }
 
     uint64_t getCardSize() {
         return SD.cardSize();
@@ -157,7 +162,6 @@ public:
 
 };
 
-GOR_Config GOR_Config;
 
 
 #endif //PLATFORM_GOR_GOR_CONFIG_HPP
