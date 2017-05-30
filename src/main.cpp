@@ -5,7 +5,7 @@
 #include "GOR_Platform.hpp"
 
 String GOR_HeartbeatPayload() {
-    return "{\"nodename\":\"" + gor.nodeName + "\"}";
+    return "{\"nodename\":\"" + gor.config.nodeName + "\"}";
 }
 
 

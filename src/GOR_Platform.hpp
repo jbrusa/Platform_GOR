@@ -12,6 +12,8 @@
 #include "SimpleTimer.h"
 
 #include "GOR_SDCard.hpp"
+#include "GOR_Config.hpp"
+#include "GOR_WebServer.hpp"
 
 
 #define S(x)                        String(x)
@@ -30,22 +32,7 @@
 
 #define INTERVAL_MQTT_KEEPALIVE     5000
 #define INTERVAL_HEARTBEAT          5000
-#define INTERVAL_WIFI_KEEPALIVE     10000
-
-#define PRM_NODENAME                "NODENAME"
-
-#define PRM_WIFI_SSID               "WIFI_SSID"
-#define PRM_WIFI_PWD                "WIFI_PWD"
-
-#define PRM_MQTT_HOST               "MQTT_HOST"
-#define PRM_MQTT_PORT               "MQTT_PORT"
-#define PRM_MQTT_TOPIC_HEARTBEAT    "MQTT_TOPIC_HEARTBEAT"
-#define PRM_MQTT_TOPIC_ACTIONS      "MQTT_TOPIC_ACTIONS"
-#define PRM_MQTT_TOPIC_DEBUG        "MQTT_TOPIC_DEBUG"
-#define PRM_MQTT_TOPIC_EVENTS       "MQTT_TOPIC_EVENTS"
-#define PRM_MQTT_TOPIC_EXTRA1       "MQTT_TOPIC_EXTRA1"
-#define PRM_MQTT_TOPIC_EXTRA2       "MQTT_TOPIC_EXTRA2"
-#define PRM_MQTT_TOPIC_EXTRA3       "MQTT_TOPIC_EXTRA3"
+#define INTERVAL_WIFI_KEEPALIVE     60000
 
 
 extern void GOR_Setup();
@@ -54,11 +41,10 @@ extern void GOR_MessageReceived(String, String);
 extern String GOR_HeartbeatPayload();
 
 void MqttKeepAlive(void);
+void WifiEvent(WiFiEvent_t);
 void WifiKeepAlive(void);
 void Heartbeat(void);
 void onMqttMessage(char*, byte*, unsigned int);
-
-
 
 
 WiFiClient wifi;
@@ -69,22 +55,13 @@ PubSubClient mqtt(wifi);
 class GOR_Platform {
 public:
     GOR_SDCard sd;
+    GOR_Config config;
+    GOR_WebServer webserver;
     SimpleTimer timer;
 
     bool debugMode;
 
-    String nodeName;
-    String prmWifiSSID;
-    String prmWifiPwd;
-    String prmMqttHost;
-    String prmMqttPort;
-    String prmMqttTopicHeartbeat;
-    String prmMqttTopicActions;
-    String prmMqttTopicDebug;
-    String prmMqttTopicEvents;
-    String prmMqttTopicExtra1;
-    String prmMqttTopicExtra2;
-    String prmMqttTopicExtra3;
+
 
     void Debug(String s) {
         #ifdef SERIAL_DEBUG
@@ -94,10 +71,6 @@ public:
         if(debugMode) {
             sd.log(s);
         }
-    }
-
-    String getSetting(String settingName) {
-        return sd.getSetting(settingName);
     }
 
     void begin() {
@@ -110,33 +83,34 @@ public:
         Debug(SF("SD Card init"));
         sd.begin(PIN_CS_SD);
 
-        nodeName = getSetting(PRM_NODENAME);
-        prmWifiSSID = getSetting(PRM_WIFI_SSID);
-        prmWifiPwd = getSetting(PRM_WIFI_PWD);
-        prmMqttHost = getSetting(PRM_MQTT_HOST);
-        prmMqttPort = getSetting(PRM_MQTT_PORT);
-        prmMqttTopicHeartbeat = getSetting(PRM_MQTT_TOPIC_HEARTBEAT);
-        prmMqttTopicActions = getSetting(PRM_MQTT_TOPIC_ACTIONS);
-        prmMqttTopicDebug = getSetting(PRM_MQTT_TOPIC_DEBUG);
-        prmMqttTopicEvents = getSetting(PRM_MQTT_TOPIC_EVENTS);
-        prmMqttTopicExtra1 = getSetting(PRM_MQTT_TOPIC_EXTRA1);
-        prmMqttTopicExtra2 = getSetting(PRM_MQTT_TOPIC_EXTRA2);
-        prmMqttTopicExtra3 = getSetting(PRM_MQTT_TOPIC_EXTRA3);
+        Debug(SF("--------------------------------"));
+        Debug(SF("Config init"));
+        config.begin();
 
         Debug(SF("--------------------------------"));
+        delay(1000);
+
         Debug(SF("Wifi init"));
-        WiFi.begin(prmWifiSSID.c_str(), prmWifiPwd.c_str());
+        Debug(SF("Connecting to ") + config.wifiSSID + " using " + config.wifiPwd);
+        WiFi.onEvent(WifiEvent);
+        WiFi.enableSTA(true);
+        WiFi.enableAP(false);
+        WiFi.begin(config.wifiSSID.c_str(), config.wifiPwd.c_str());
 
         Debug(SF("--------------------------------"));
         Debug(SF("MQTT init"));
         mqtt.setCallback(onMqttMessage);
-        mqtt.setServer(prmMqttHost.c_str(),atoi(prmMqttPort.c_str()));
+        mqtt.setServer(config.mqttHost.c_str(),atoi(config.mqttPort.c_str()));
 
         Debug(SF("--------------------------------"));
         Debug(SF("Timer init"));
         timer.setInterval(INTERVAL_MQTT_KEEPALIVE, MqttKeepAlive);
         timer.setInterval(INTERVAL_WIFI_KEEPALIVE, WifiKeepAlive);
         timer.setInterval(INTERVAL_HEARTBEAT, Heartbeat);
+
+        Debug(SF("--------------------------------"));
+        Debug(SF("Webserver init"));
+        webserver.begin();
 
         Debug(SF("--------------------------------"));
         Debug(SF("Custom init"));
@@ -148,12 +122,13 @@ public:
 
     void sendEvent(String s) {
         Debug(SF("MQTT - Sent event : ") + s);
-        mqtt.publish(prmMqttTopicEvents.c_str(), s.c_str());
+        mqtt.publish(config.mqttTopicEvents.c_str(), s.c_str());
     }
 
     void loop() {
         timer.run();
         mqtt.loop();
+        webserver.loop();
 
         // Custom loop
         GOR_Loop();
@@ -171,19 +146,35 @@ void MqttKeepAlive() {
         return;
 
     gor.Debug(SF("MQTT - Connecting..."));
-    if (mqtt.connect(gor.nodeName.c_str())) {
-        mqtt.subscribe(gor.prmMqttTopicActions.c_str());
+    if (mqtt.connect(gor.config.nodeName.c_str())) {
+        mqtt.subscribe(gor.config.mqttTopicActions.c_str());
 
-        if(gor.prmMqttTopicExtra1 != "") mqtt.subscribe(gor.prmMqttTopicExtra1.c_str());
-        if(gor.prmMqttTopicExtra2 != "") mqtt.subscribe(gor.prmMqttTopicExtra2.c_str());
-        if(gor.prmMqttTopicExtra3 != "") mqtt.subscribe(gor.prmMqttTopicExtra3.c_str());
+        if(gor.config.mqttTopicExtra1 != "") mqtt.subscribe(gor.config.mqttTopicExtra1.c_str());
+        if(gor.config.mqttTopicExtra2 != "") mqtt.subscribe(gor.config.mqttTopicExtra2.c_str());
+        if(gor.config.mqttTopicExtra3 != "") mqtt.subscribe(gor.config.mqttTopicExtra3.c_str());
 
         gor.Debug(SF("MQTT - Connected OK"));
-        String event = gor.nodeName + "_Connected";
+        String event = gor.config.nodeName + "_Connected";
         gor.sendEvent(event.c_str());
     }
 }
 
+
+void WifiEvent(WiFiEvent_t event) {
+    if(event == SYSTEM_EVENT_STA_CONNECTED) {
+        gor.Debug(S("Wifi - Connected to ") + gor.config.wifiSSID);
+        gor.Debug(S("Wifi - Getting IP..."));
+    }
+
+    if(event == SYSTEM_EVENT_STA_GOT_IP) {
+        gor.Debug(S("Wifi - Got IP ") + IP_STR(WiFi.localIP()));
+    }
+
+    if(event == SYSTEM_EVENT_STA_DISCONNECTED) {
+        gor.Debug(S("Wifi - Disconnected"));
+        WiFi.begin();
+    }
+}
 
 void WifiKeepAlive() {
     if(WiFi.isConnected())
@@ -194,9 +185,12 @@ void WifiKeepAlive() {
 
 
 void Heartbeat() {
+    if(!mqtt.connected())
+        return;
+
     String payload = GOR_HeartbeatPayload();
     gor.Debug(SF("MQTT - Heartbeat - ") + payload);
-    mqtt.publish(gor.prmMqttTopicHeartbeat.c_str(), payload.c_str());
+    mqtt.publish(gor.config.mqttTopicHeartbeat.c_str(), payload.c_str());
 }
 
 
@@ -208,13 +202,13 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     }
 
     String outTopic = topicStr;
-    if(topicStr == gor.prmMqttTopicActions)
+    if(topicStr == gor.config.mqttTopicActions)
         outTopic = "ACTION";
-    else if(topicStr == gor.prmMqttTopicExtra1)
+    else if(topicStr == gor.config.mqttTopicExtra1)
         outTopic = "EXTRA1";
-    else if(topicStr == gor.prmMqttTopicExtra2)
+    else if(topicStr == gor.config.mqttTopicExtra2)
         outTopic = "EXTRA2";
-    else if(topicStr == gor.prmMqttTopicExtra3)
+    else if(topicStr == gor.config.mqttTopicExtra3)
         outTopic = "EXTRA3";
 
     gor.Debug(SF("MQTT - Message received - ") + outTopic + SF(" - ") + payloadStr);
