@@ -24,6 +24,7 @@
 #define PRM_MQTT_TOPIC_EXTRA3       "MQTT_TOPIC_EXTRA3"
 
 #define CONFIG_FILE                 "/CONFIG.TXT"
+#define CONFIG_FILE_BAK             "/CONFIG.BAK"
 
 #define READ_NAME                   1
 #define READ_VAL                    2
