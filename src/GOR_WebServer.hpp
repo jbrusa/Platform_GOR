@@ -5,12 +5,62 @@
 #ifndef PLATFORM_GOR_GOR_WEBSERVER_HPP
 #define PLATFORM_GOR_GOR_WEBSERVER_HPP
 
+#include "GOR_Platform.hpp"
+
 #define HTTP_PORT       80
 
-WiFiServer server(80);
+#define TAIL_SIZE       1000
+
+WiFiServer server(HTTP_PORT);
+
+extern String GetInfoESP();
+extern String GetInfoWifi();
+
+
+
+unsigned char h2int(char c)
+{
+    if (c >= '0' && c <='9')
+        return((unsigned char)c - '0');
+
+    if (c >= 'a' && c <='f')
+        return((unsigned char)c - 'a' + 10);
+
+    if (c >= 'A' && c <='F')
+        return((unsigned char)c - 'A' + 10);
+
+    return(0);
+}
+
+
+String urldecode(String str)
+{
+
+    String encodedString="";
+    char c;
+    char code0;
+    char code1;
+    for (int i =0; i < str.length(); i++){
+        c=str.charAt(i);
+        if (c == '+'){
+            encodedString+=' ';
+        }else if (c == '%') {
+            code0=str.charAt(++i);
+            code1=str.charAt(++i);
+            c = (h2int(code0) << 4) | h2int(code1);
+            encodedString+=c;
+        } else {
+            encodedString += c;
+        }
+    }
+
+    return encodedString;
+}
+
 
 class GOR_WebServer {
 public:
+
 
 
     void begin() {
@@ -19,59 +69,125 @@ public:
 
     void loop() {
         WiFiClient client = server.available();
+
+        if (!client)
+            return;
+
         String responseFile = "";
+        String response = "";
+        String mimeType = "";
+        String currentLine = "";
 
-        if (client) {
-            String currentLine = "";
-            while (client.connected()) {
-                if (client.available()) {
-                    char c = client.read();
-                    Serial.write(c);
-                    if (c == '\n') {
+        uint32_t t = millis();
 
-                        // if the current line is blank, you got two newline characters in a row.
-                        // that's the end of the client HTTP request, so send a response:
-                        if (currentLine.length() == 0) {
+        while (client.connected()) {
+            if(millis() - t > 2000)
+                break;
 
-                            Serial.println(String("Response file : ") + responseFile);
-                            // the content of the HTTP response follows the header:
-                            if (SD.exists(String("/wwwroot/") + responseFile)) {
-                                File f = SD.open(String("/wwwroot/") + responseFile);
+            if (client.available()) {
+                char c = client.read();
+
+                if (c == '\n') {
+
+                    // if the current line is blank, you got two newline characters in a row.
+                    // that's the end of the client HTTP request, so send a response:
+                    if (currentLine.length() == 0) {
+
+                        // the content of the HTTP response follows the header:
+                        if(response != "") {
+                            client.println("HTTP/1.1 200 OK");
+                            client.println(String("Content-type:") + mimeType);
+                            client.println();
+                            client.print(response);
+                            client.println();
+
+                            if(response == "Restarting") {
+                                ESP.restart();
+                            }
+                        } else if(responseFile != "") {
+                            if (SD.exists(responseFile)) {
+                                File f = SD.open(responseFile);
                                 client.println("HTTP/1.1 200 OK");
-                                client.println("Content-type:text/html");
+                                client.println("Content-type:" + mimeType);
                                 client.println();
                                 while (f.available()) {
-                                    // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
-                                    // and a content-type so the client knows what's coming, then a blank line:
-
                                     client.print((char) f.read());
                                 }
                                 client.println();
                             } else {
-                                client.println("HTTP/1.1 404 Not Found");
+                                client.println("HTTP/1.1 OK");
+                                client.println("Content-type:text/html");
+                                client.println();
+                                client.print(ESP.getFreeHeap());
+                                client.print("<br/>");
+                                client.print(responseFile);
                                 client.println();
                             }
-
-                            break;
-                        } else {    // if you got a newline, then clear currentLine:
-                            currentLine = "";
                         }
-                    } else if (c != '\r') {  // if you got anything else but a carriage return character,
-                        currentLine += c;      // add it to the end of the currentLine
-                    }
 
-                    // Check to see if the client request was "GET /H" or "GET /L":
-                    if (currentLine.startsWith("GET /")) {
-                        int end = currentLine.indexOf(' ', 4);
-                        responseFile = currentLine.substring(4, end - 4);
+                        break;
+                    } else {
+                        if (currentLine.startsWith("GET /")) {
+                            int end = currentLine.indexOf(' ', 4);
 
-                        if (responseFile == "/")
-                            responseFile = "index.html";
+                            String query = currentLine.substring(4, end);
+                            if (query == "/config") {
+                                mimeType = "text/txt";
+                                responseFile = CONFIG_FILE;
+                            } else if (query == "/restart") {
+                                response = "Restarting";
+                            } else if (query.startsWith("/save_config?")) {
+                                query = query.substring(20);
+                                query = urldecode(query);
+                                mimeType = "text/txt";
+
+                                SD.rename(CONFIG_FILE, CONFIG_FILE_BAK);
+                                File f = SD.open(CONFIG_FILE, FILE_WRITE);
+                                f.print(query);
+                                f.close();
+
+                                mimeType = "text/html";
+                                responseFile = "/wwwroot/index.html";
+                            } else if (query == "/log") {
+                                mimeType = "text/txt";
+                                responseFile = LOG_FILE;
+                            } else if (query == "/info-esp") {
+                                mimeType = "application/json";
+                                response = "{";
+                                response += GetInfoESP();
+                                response += "}";
+                            } else if (query == "/info-wifi") {
+                                mimeType = "application/json";
+                                response = "{";
+                                response += GetInfoWifi();
+                                response += "}";
+                            } else if (query == "/") {
+                                mimeType = "text/html";
+                                responseFile = "/wwwroot/index.html";
+                            } else {
+                                uint16_t lastDot = (uint16_t) query.lastIndexOf('.');
+                                String ext = query.substring(lastDot + 1);
+
+                                if (ext == "html" || ext == "htm") mimeType = "text/html";
+                                if (ext == "png") mimeType = "image/png";
+                                if (ext == "css") mimeType = "text/css";
+                                if (ext == "js") mimeType = "application/javascript";
+
+                                responseFile = String("/wwwroot/") + query;
+                            }
+                        }
+
+                        currentLine = "";
                     }
+                } else if (c != '\r') {  // if you got anything else but a carriage return character,
+                    currentLine += c;      // add it to the end of the currentLine
                 }
             }
-            client.stop();
         }
+
+        client.flush();
+        client.stop();
+
     }
 };
 
