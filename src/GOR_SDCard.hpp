@@ -7,7 +7,7 @@
 
 #include <SD.h>
 
-#define LOG_FILE            "LOG.TXT"
+#define LOG_FILE            "/LOG.TXT"
 
 enum GOR_SD_Errors {
     CARD_MOUNT_FAILED = 1,
