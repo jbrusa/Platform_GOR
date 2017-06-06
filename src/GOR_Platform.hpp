@@ -14,7 +14,8 @@
 #include "GOR_SDCard.hpp"
 #include "GOR_Config.hpp"
 #include "GOR_WebServer.hpp"
-
+#include "GOR_Relay.h"
+#include "GOR_RGBLed.hpp"
 
 #define S(x)                        String(x)
 #define SF(x)                       S(F(x))
@@ -28,11 +29,16 @@
 #define PIN_CS_SD                   2
 #define PIN_RELAY                   15
 
+#define RGBLED_R_PIN                13
+#define RGBLED_G_PIN                12
+#define RGBLED_B_PIN                14
+
 #define SERIAL_SPEED                115200
 
 #define INTERVAL_MQTT_KEEPALIVE     5000
 #define INTERVAL_HEARTBEAT          5000
 #define INTERVAL_WIFI_KEEPALIVE     60000
+#define INTERVAL_RGBLED             200
 
 
 extern void GOR_Setup();
@@ -46,22 +52,27 @@ void WifiKeepAlive(void);
 void Heartbeat(void);
 void onMqttMessage(char*, byte*, unsigned int);
 
-
 WiFiClient wifi;
 PubSubClient mqtt(wifi);
 
 
 
 class GOR_Platform {
+private:
+    bool debugMode;
+
+
 public:
     GOR_SDCard sd;
     GOR_Config config;
     GOR_WebServer webserver;
+    GOR_RGBLed led;
+    GOR_Relay relay;
     SimpleTimer timer;
 
-    bool debugMode;
 
-
+    void setDebugMode(bool debugMode)   { this->debugMode = debugMode; }
+    bool getDebugMode()                 { return debugMode; }
 
     void Debug(String s) {
         #ifdef SERIAL_DEBUG
@@ -95,7 +106,7 @@ public:
         WiFi.onEvent(WifiEvent);
         WiFi.enableSTA(true);
         WiFi.enableAP(false);
-        WiFi.begin(config.wifiSSID.c_str(), config.wifiPwd.c_str());
+
 
         Debug(SF("--------------------------------"));
         Debug(SF("MQTT init"));
@@ -107,6 +118,14 @@ public:
         timer.setInterval(INTERVAL_MQTT_KEEPALIVE, MqttKeepAlive);
         timer.setInterval(INTERVAL_WIFI_KEEPALIVE, WifiKeepAlive);
         timer.setInterval(INTERVAL_HEARTBEAT, Heartbeat);
+
+        Debug(SF("--------------------------------"));
+        Debug(SF("Relay init"));
+        relay.begin(PIN_RELAY);
+
+        Debug(SF("--------------------------------"));
+        Debug(SF("RGB LED init"));
+        led.begin(RGBLED_R_PIN, RGBLED_G_PIN, RGBLED_B_PIN);
 
         Debug(SF("--------------------------------"));
         Debug(SF("Webserver init"));
@@ -124,6 +143,7 @@ public:
         Debug(SF("MQTT - Sent event : ") + s);
         mqtt.publish(config.mqttTopicEvents.c_str(), s.c_str());
     }
+
 
     void loop() {
         timer.run();
@@ -147,6 +167,7 @@ void MqttKeepAlive() {
 
     gor.Debug(SF("MQTT - Connecting..."));
     if (mqtt.connect(gor.config.nodeName.c_str())) {
+        gor.led.setColor(COLOR_BLUE);
         mqtt.subscribe(gor.config.mqttTopicActions.c_str());
 
         if(gor.config.mqttTopicExtra1 != "") mqtt.subscribe(gor.config.mqttTopicExtra1.c_str());
@@ -161,19 +182,31 @@ void MqttKeepAlive() {
 
 
 void WifiEvent(WiFiEvent_t event) {
-    if(event == SYSTEM_EVENT_STA_CONNECTED) {
-        gor.Debug(S("Wifi - Connected to ") + gor.config.wifiSSID);
-        gor.Debug(S("Wifi - Getting IP..."));
+    switch(event) {
+        case SYSTEM_EVENT_STA_START:
+            gor.Debug(S("Wifi - Started "));
+            gor.led.setColor(COLOR_RED);
+            WiFi.begin(gor.config.wifiSSID.c_str(), gor.config.wifiPwd.c_str());
+            break;
+
+        case SYSTEM_EVENT_STA_CONNECTED:
+            gor.Debug(S("Wifi - Connected to ") + gor.config.wifiSSID);
+            gor.Debug(S("Wifi - Getting IP..."));
+            gor.led.setColor(COLOR_ORANGE);
+            break;
+
+        case SYSTEM_EVENT_STA_GOT_IP:
+            gor.Debug(S("Wifi - Got IP ") + IP_STR(WiFi.localIP()));
+            gor.led.setColor(COLOR_GREEN);
+            break;
+
+        case SYSTEM_EVENT_STA_DISCONNECTED:
+            gor.Debug(S("Wifi - Disconnected"));
+            gor.led.setColor(COLOR_RED);
+            WiFi.begin();
+            break;
     }
 
-    if(event == SYSTEM_EVENT_STA_GOT_IP) {
-        gor.Debug(S("Wifi - Got IP ") + IP_STR(WiFi.localIP()));
-    }
-
-    if(event == SYSTEM_EVENT_STA_DISCONNECTED) {
-        gor.Debug(S("Wifi - Disconnected"));
-        WiFi.begin();
-    }
 }
 
 void WifiKeepAlive() {
@@ -216,6 +249,31 @@ void onMqttMessage(char* topic, byte* payload, unsigned int length) {
     GOR_MessageReceived(outTopic, payloadStr);
 }
 
+String GetInfoESP () {
+    String response = "";
+    response += S("\"NodeName\":\"") + gor.config.nodeName + S("\",");
+    response += S("\"Free memory \":\"") + ESP.getFreeHeap() + S(" bytes\",");
+    response += S("\"Chip revision \":\"") + ESP.getChipRevision() + S("\",");
+    response += S("\"CPU Freq \":\"") + ESP.getCpuFreqMHz() + S(" MHz\",");
+    response += S("\"Flash size \":\"") + ESP.getFlashChipSize() + S(" bytes\"");
+    return response;
+}
+
+
+String GetInfoWifi () {
+    String response = "";
+    response += S("\"SSID \":\"") + WiFi.SSID() + S("\",");
+    response += S("\"Signal Strength \":\"") + WiFi.RSSI() + S("\",");
+    response += S("\"MAC Address \":\"") + WiFi.macAddress() + S("\",");
+    response += S("\"IP\":\"") + IP_STR(WiFi.localIP()) + S("\",");
+    response += S("\"Subnet Mask\":\"") + IP_STR(WiFi.subnetMask()) + S("\",");
+    response += S("\"Gateway \":\"") + IP_STR(WiFi.gatewayIP()) + S("\",");
+    response += S("\"DNS \":\"") + IP_STR(WiFi.dnsIP()) + S("\",");
+    response += S("\"MQTT Connected \":\"") + (mqtt.connected() ? S("Yes") : S("No")) + S("\",");
+    response += S("\"MQTT Host \":\"") + gor.config.mqttHost + ":" +  gor.config.mqttPort + S("\"");
+
+    return response;
+}
 
 void setup() {
     gor.begin();
